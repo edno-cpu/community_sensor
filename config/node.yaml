@@ -8,7 +8,7 @@ tick_seconds: 1
 # Sensor configuration
 sensors:
   pms1:
-    enabled: true
+    enabled: false
     port: "/dev/ttyS0"     # PMS #1 on GPIO14/15 → /dev/ttyS0
   pms2:
     enabled: true
