@@ -1,0 +1,17 @@
+[Unit]
+Description=ÉMIS Community Sensor Node
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/emis/code
+ExecStart=/usr/bin/python3 /home/pi/emis/code/collect_data.py
+Restart=on-failure
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
+
