@@ -2,12 +2,11 @@
 """
 Main data collection loop.
 
-- Loads config/node.yaml
-- Sets up PMS1, PMS2, BME, SO2 (SO2 still stubbed)
-- Every tick:
-    - reads sensors
-    - builds a row dict
-    - hands it to ChunkManager to write into 5-minute chunk file
+Now writes directly to one rolling daily CSV per node:
+
+    data/daily/<node_id>_YYYY-MM-DD.csv
+
+Each row is written in the canonical COLUMNS order defined in daily_writer.py.
 """
 
 from __future__ import annotations
@@ -23,13 +22,12 @@ from sensors.pms import PMSReader
 from sensors.bme import read_bme
 from sensors.so2 import read_so2
 from utils.timekeeping import (
-    TimeConfig,
     now_utc,
     utc_to_local,
     isoformat_utc_z,
     isoformat_local,
 )
-from manage_5min import ChunkManager
+from daily_writer import DailyWriter
 
 
 def load_config(root: Path) -> Dict[str, Any]:
@@ -63,13 +61,6 @@ def main() -> None:
     tz_name: str = cfg.get("timezone", "UTC")
     tick_seconds: float = float(cfg.get("tick_seconds", 1.0))
 
-    chunk_cfg_raw = cfg.get("chunks", {})
-    time_cfg = TimeConfig(
-        timezone_name=tz_name,
-        window_seconds=int(chunk_cfg_raw.get("window_seconds", 300)),
-        use_utc_filenames=bool(chunk_cfg_raw.get("use_utc_filenames", True)),
-    )
-
     # Sensor config
     s_cfg = cfg.get("sensors", {})
 
@@ -94,9 +85,10 @@ def main() -> None:
     so2_bus = s_cfg.get("so2", {}).get("i2c_bus", 1)
     so2_addr = s_cfg.get("so2", {}).get("address", 0x75)
 
-    cm = ChunkManager(root_dir=root, node_id=node_id, time_cfg=time_cfg)
+    # New: daily writer instead of 5-minute chunk manager
+    dw = DailyWriter(root_dir=root, node_id=node_id, tz_name=tz_name)
 
-    log.info("Starting main collection loop")
+    log.info("Starting main collection loop (daily writer mode)")
 
     try:
         while True:
@@ -109,7 +101,7 @@ def main() -> None:
                 "node_id": node_id,
             }
 
-            # BME
+            # BME688
             if bme_enabled:
                 try:
                     b = read_bme(bus=bme_bus, address=bme_addr)
@@ -119,7 +111,7 @@ def main() -> None:
                         row["pressure_hpa"] = b.get("pressure_hpa")
                         row["voc_ohm"] = b.get("voc_ohm")
                 except Exception as e:
-                    log.warning(f"BME read error: {e}")
+                    logging.warning(f"BME read error: {e}")
 
             # PMS1
             if pms1_reader is not None:
@@ -135,7 +127,7 @@ def main() -> None:
                         row["pms1_status"] = "no_frame"
                 except Exception as e:
                     row["pms1_status"] = f"error:{e}"
-                    log.warning(f"PMS1 read error: {e}")
+                    logging.warning(f"PMS1 read error: {e}")
 
             # PMS2
             if pms2_reader is not None:
@@ -150,18 +142,19 @@ def main() -> None:
                         row["pms2_status"] = "no_frame"
                 except Exception as e:
                     row["pms2_status"] = f"error:{e}"
-                    log.warning(f"PMS2 read error: {e}")
+                    logging.warning(f"PMS2 read error: {e}")
 
-            # SO2
+            # SO2 (still stubbed)
             if so2_enabled:
                 try:
                     v = read_so2(bus=so2_bus, address=so2_addr)
                     if v is not None:
                         row["so2_ppm"] = v
                 except Exception as e:
-                    log.warning(f"SO2 read error: {e}")
+                    logging.warning(f"SO2 read error: {e}")
 
-            cm.write_sample(row=row, sample_time_utc=t_utc)
+            # Write one row into today's daily CSV
+            dw.write_sample(row=row, sample_time_utc=t_utc)
 
             time.sleep(tick_seconds)
 
@@ -169,7 +162,7 @@ def main() -> None:
         log.info("Stopping collection loop (KeyboardInterrupt)")
 
     finally:
-        cm.close()
+        dw.close()
         if pms1_reader is not None:
             pms1_reader.close()
         if pms2_reader is not None:
