@@ -21,6 +21,7 @@ import yaml  # pip install pyyaml
 from sensors.pms import PMSReader
 from sensors.bme import read_bme
 from sensors.so2 import init_so2, read_so2
+from sensors.opc_n3 import OPCN3Reader  # <-- NEW
 from utils.timekeeping import (
     now_utc,
     utc_to_local,
@@ -66,6 +67,7 @@ def main() -> None:
 
     pms1_reader: Optional[PMSReader] = None
     pms2_reader: Optional[PMSReader] = None
+    opc_reader: Optional[OPCN3Reader] = None  # <-- NEW
 
     # PMS1
     if s_cfg.get("pms1", {}).get("enabled", False):
@@ -78,6 +80,19 @@ def main() -> None:
         p2_port = s_cfg["pms2"]["port"]
         pms2_reader = PMSReader(p2_port)
         log.info(f"PMS2 enabled on {p2_port}")
+
+    # OPC-N3
+    opc_enabled = s_cfg.get("opc", {}).get("enabled", False)
+    opc_port = s_cfg.get("opc", {}).get("port", "/dev/serial0")
+    opc_baud = int(s_cfg.get("opc", {}).get("baudrate", 9600))
+
+    if opc_enabled:
+        try:
+            opc_reader = OPCN3Reader(port=opc_port, baudrate=opc_baud)
+            log.info(f"OPC-N3 enabled on {opc_port} @ {opc_baud} baud")
+        except Exception as e:
+            log.warning(f"Disabling OPC-N3 after init failure: {e}")
+            opc_reader = None
 
     # BME688
     bme_enabled = s_cfg.get("bme", {}).get("enabled", False)
@@ -163,6 +178,22 @@ def main() -> None:
                     row["pms2_status"] = f"error:{e}"
                     logging.warning(f"PMS2 read error: {e}")
 
+            # OPC-N3
+            if opc_reader is not None:
+                try:
+                    o = opc_reader.read()  # adjust method name if different
+                    if o:
+                        # Assumes dict with pm1/pm25/pm10; tweak keys if needed
+                        row["pm1_atm_opc"] = o.get("pm1")
+                        row["pm25_atm_opc"] = o.get("pm25")
+                        row["pm10_atm_opc"] = o.get("pm10")
+                        row["opc_status"] = "ok"
+                    else:
+                        row["opc_status"] = "no_frame"
+                except Exception as e:
+                    row["opc_status"] = f"error:{e}"
+                    logging.warning(f"OPC-N3 read error: {e}")
+
             # SO2
             if so2_enabled:
                 try:
@@ -191,6 +222,8 @@ def main() -> None:
             pms1_reader.close()
         if pms2_reader is not None:
             pms2_reader.close()
+        if opc_reader is not None:   # <-- NEW
+            opc_reader.close()
         log.info("Shutdown complete")
 
 

@@ -9,26 +9,34 @@ tick_seconds: 1
 sensors:
   pms1:
     enabled: true
-    port: "/dev/ttyAMA0"   # PMS #2 on GPIO0/1 → /dev/ttyAMA0
+    port: "/dev/ttyAMA0"      # PMS #1 on GPIO0/1 → /dev/ttyAMA0
+
   pms2:
     enabled: false
-    # port: "/dev/ttyS0"     # PMS #1 on GPIO14/15 → /dev/ttyS0
+    # port: "/dev/ttyS0"      # PMS #2 on GPIO14/15 → /dev/ttyS0
+
+  opc:
+    enabled: true
+    port: "/dev/serial0"      # OPC-N3 on UART (GPIO14/15 alias)
+    baudrate: 9600
+
   bme:
     enabled: true
     i2c_bus: 1
-    address: 0x76          # BME688 at 0x76 (SDO tied low)
+    address: 0x76             # BME688 at 0x76 (SDO tied low)
+
   so2:
-    enabled: true         # leave off until SO2 behaves
+    enabled: true             # Leave off until stable
     i2c_bus: 1
     address: 0x74
 
-# 5-minute chunk settings
+# 5-minute chunk settings (deprecated with daily writer but harmless)
 chunks:
-  window_seconds: 300      # 5 minutes
-  use_utc_filenames: true  # filenames in UTC
+  window_seconds: 300
+  use_utc_filenames: true
 
-# Upload behavior (we'll wire this up later)
+# Upload behavior (placeholder)
 upload:
   enabled: false
-  method: "http"           # placeholder
-  min_age_minutes: 10      # don't touch very recent files
+  method: "http"
+  min_age_minutes: 10
