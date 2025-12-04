@@ -85,11 +85,11 @@ def main() -> None:
     opc_enabled = s_cfg.get("opc", {}).get("enabled", False)
     opc_bus = int(s_cfg.get("opc", {}).get("spi_bus", 0))
     opc_device = int(s_cfg.get("opc", {}).get("spi_device", 0))
-    opc_speed = int(s_cfg.get("opc", {}).get("spi_max_speed", 5000000))
+    # opc_speed = int(s_cfg.get("opc", {}).get("spi_max_speed", 5000000))
 
     if opc_enabled:
         try:
-            opc_reader = OPCN3(bus=opc_bus, device=opc_device, spi_max_speed=opc_speed)
+            opc_reader = OPCN3(bus=opc_bus, device=opc_device) #spi_max_speed=opc_speed 
             log.info(
                 f"OPC-N3 enabled on SPI bus {opc_bus}, device {opc_device}, "
                 f"max_speed {opc_speed}"
