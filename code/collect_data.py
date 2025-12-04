@@ -21,7 +21,7 @@ import yaml  # pip install pyyaml
 from sensors.pms import PMSReader
 from sensors.bme import read_bme
 from sensors.so2 import init_so2, read_so2
-from sensors.opc_n3 import OPCN3   # <-- OPC class here
+from sensors.opc_n3 import OPCN3
 from utils.timekeeping import (
     now_utc,
     utc_to_local,
@@ -67,7 +67,7 @@ def main() -> None:
 
     pms1_reader: Optional[PMSReader] = None
     pms2_reader: Optional[PMSReader] = None
-    opc_reader: Optional[OPCN3] = None   # <-- OPC handle
+    opc_reader: Optional[OPCN3] = None
 
     # PMS1
     if s_cfg.get("pms1", {}).get("enabled", False):
@@ -81,16 +81,19 @@ def main() -> None:
         pms2_reader = PMSReader(p2_port)
         log.info(f"PMS2 enabled on {p2_port}")
 
-    # OPC-N3
+    # OPC-N3 (SPI-based)
     opc_enabled = s_cfg.get("opc", {}).get("enabled", False)
-    opc_port = s_cfg.get("opc", {}).get("port", "/dev/serial0")
-    opc_baud = int(s_cfg.get("opc", {}).get("baudrate", 9600))
+    opc_bus = int(s_cfg.get("opc", {}).get("spi_bus", 0))
+    opc_device = int(s_cfg.get("opc", {}).get("spi_device", 0))
+    opc_speed = int(s_cfg.get("opc", {}).get("spi_max_speed", 5000000))
 
     if opc_enabled:
         try:
-            # Adjust args if your OPCN3 __init__ is different
-            opc_reader = OPCN3(opc_port, opc_baud)
-            log.info(f"OPC-N3 enabled on {opc_port} @ {opc_baud} baud")
+            opc_reader = OPCN3(bus=opc_bus, device=opc_device, spi_max_speed=opc_speed)
+            log.info(
+                f"OPC-N3 enabled on SPI bus {opc_bus}, device {opc_device}, "
+                f"max_speed {opc_speed}"
+            )
         except Exception as e:
             log.warning(f"Disabling OPC-N3 after init failure: {e}")
             opc_reader = None

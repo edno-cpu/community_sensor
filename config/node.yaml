@@ -17,8 +17,9 @@ sensors:
 
   opc:
     enabled: true
-    port: "/dev/serial0"      # OPC-N3 on UART (GPIO14/15 alias)
-    baudrate: 9600
+    spi_bus: 0                # SPI bus number
+    spi_device: 0             # SPI chip select (CE0)
+    spi_max_speed: 5000000    # optional, matches OPCN3 default
 
   bme:
     enabled: true
@@ -26,7 +27,7 @@ sensors:
     address: 0x76             # BME688 at 0x76 (SDO tied low)
 
   so2:
-    enabled: true             # Leave off until stable
+    enabled: true
     i2c_bus: 1
     address: 0x74
 
