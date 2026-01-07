@@ -57,6 +57,10 @@ COLUMNS = [
     "pms2_status",
 
     "so2_ppm",
+    "so2_raw",
+    "so2_byte0",
+    "so2_byte1",
+    "so2_error",
 ]
 
 

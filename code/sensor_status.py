@@ -6,10 +6,11 @@ Logic (file-based, no hardware probing):
 - If required columns for a sensor are missing from the file header -> Not integrated
 - Else:
     - For PMS sensors: use the pmsX_status column as the primary indicator
-    - For others: if latest row has non-empty values for the sensor's columns -> recording
-               else -> connected but not recording (or not connected, depending on schema)
+    - For others: if latest row has "present" values for the sensor's columns -> recording
+               else -> connected but not recording
 
-Output is colorized + bold for fast SSH triage.
+Important detail:
+- A value of "0" (zero) IS considered present/recording.
 """
 
 from __future__ import annotations
@@ -40,9 +41,12 @@ SENSORS: List[Tuple[str, List[str], Optional[str]]] = [
     ("PMS-2", ["pm1_atm_pms2", "pm25_atm_pms2", "pm10_atm_pms2"], "pms2_status"),
     ("BME688", ["temp_c", "rh_pct", "pressure_hpa"], None),
 
-    # These require your DailyWriter to include these columns (otherwise "Not integrated"):
+    # These require your DailyWriter/collector to include these columns:
     ("OPC-N3", ["pm1_atm_opc", "pm25_atm_opc", "pm10_atm_opc"], "opc_status"),
-    ("SPEC SO2", ["so2_ppm"], None),
+
+    # SO2: right now you're reading/writing so2_raw / bytes.
+    # If later you compute ppm, keep so2_ppm in here too.
+    ("SPEC SO2", ["so2_raw", "so2_byte0", "so2_byte1"], None),
 ]
 
 
@@ -91,16 +95,36 @@ def read_header_and_last_row(path: Path) -> Tuple[List[str], Dict[str, str]]:
         n = min(len(header), len(last))
         header = header[:n]
         last = last[:n]
-        return header, {header[i]: (last[i].strip() if last[i] is not None else "") for i in range(n)}
+        return header, {
+            header[i]: (last[i].strip() if last[i] is not None else "")
+            for i in range(n)
+        }
 
 
-def nonempty(vals: Dict[str, str], cols: List[str]) -> bool:
+def is_present_value(v: str) -> bool:
     """
-    True if ANY of the specified columns has a non-empty, non-NA value.
+    True if the string value should count as "present/recording".
+
+    - Empty string -> not present
+    - "na", "nan", "none", "null" (case-insensitive) -> not present
+    - "0" / "0.0" / etc -> PRESENT (important!)
+    """
+    if v is None:
+        return False
+    s = str(v).strip()
+    if s == "":
+        return False
+    if s.lower() in ("na", "nan", "none", "null"):
+        return False
+    return True
+
+
+def any_present(vals: Dict[str, str], cols: List[str]) -> bool:
+    """
+    True if ANY of the specified columns has a present value.
     """
     for c in cols:
-        v = vals.get(c, "").strip()
-        if v != "" and v.lower() not in ("na", "nan", "none"):
+        if is_present_value(vals.get(c, "")):
             return True
     return False
 
@@ -122,6 +146,7 @@ def main() -> None:
     header_set = set(header)
 
     print(f"Sensor Status (file: {path.name})")
+
     if not header:
         print(fmt(YELLOW, "  Daily file has no header/rows yet."))
         return
@@ -137,7 +162,7 @@ def main() -> None:
             continue
 
         # 2) Value + status extraction
-        values_present = nonempty(last_vals, cols)
+        values_present = any_present(last_vals, cols)
         status_val = last_vals.get(status_col, "").strip() if status_col else ""
 
         # 3) PMS-specific: status-driven truth
@@ -149,10 +174,8 @@ def main() -> None:
             elif status_val.startswith("error"):
                 print(f"  {fmt(RED, f'{name}: Error ({status_val})')}")
             elif status_val == "no_frame":
-                # Usually means UART present but no valid frames (often unplugged or wrong port)
                 print(f"  {fmt(RED, f'{name}: Not connected (no_frame)')}")
             else:
-                # Any other unexpected status string
                 if values_present:
                     print(f"  {fmt(GREEN, f'{name}: Connected (status={status_val})')}")
                 else:
@@ -161,17 +184,16 @@ def main() -> None:
 
         # 4) Generic sensors
         if values_present:
-            # If there is a status column and it's not ok, surface it
             if status_val and status_val not in ("ok",):
                 print(f"  {fmt(YELLOW, f'{name}: Recording but status={status_val}')}")
             else:
                 print(f"  {fmt(GREEN, f'{name}: Connected and recording')}")
         else:
-            # If we have an explicit status, show it. Otherwise default to "not recording"
             if status_val:
                 print(f"  {fmt(YELLOW, f'{name}: Connected but not recording (status={status_val})')}")
             else:
                 print(f"  {fmt(YELLOW, f'{name}: Connected but not recording')}")
+
 
 if __name__ == "__main__":
     main()
