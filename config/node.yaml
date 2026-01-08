@@ -1,3 +1,5 @@
+# Minimal config for daily csv creation from 4 sensors.
+
 # Basic node identity
 node_id: "Node7"
 timezone: "America/Toronto"
@@ -30,14 +32,3 @@ sensors:
     enabled: true
     i2c_bus: 1
     address: 0x74
-
-# 5-minute chunk settings (deprecated with daily writer but harmless)
-chunks:
-  window_seconds: 300
-  use_utc_filenames: true
-
-# Upload behavior (placeholder)
-upload:
-  enabled: false
-  method: "http"
-  min_age_minutes: 10

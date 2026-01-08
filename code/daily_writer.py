@@ -23,11 +23,14 @@ COLUMNS = [
     "timestamp_local",
     "node_id",
 
+    # --- BME688 ---
     "temp_c",
     "rh_pct",
     "pressure_hpa",
     "voc_ohm",
+    "bme_status",          # optional but helpful
 
+    # --- PMS1 ---
     "pm1_cf1_pms1",
     "pm25_cf1_pms1",
     "pm10_cf1_pms1",
@@ -42,6 +45,7 @@ COLUMNS = [
     "n_10_pms1",
     "pms1_status",
 
+    # --- PMS2 ---
     "pm1_cf1_pms2",
     "pm25_cf1_pms2",
     "pm10_cf1_pms2",
@@ -56,11 +60,19 @@ COLUMNS = [
     "n_10_pms2",
     "pms2_status",
 
-    "so2_ppm",
+    # --- OPC-N3 ---
+    "pm1_atm_opc",
+    "pm25_atm_opc",
+    "pm10_atm_opc",
+    "opc_status",
+
+    # --- SO2 (SPEC board raw bytes) ---
+    "so2_ppm",             # placeholder if you later compute ppm
     "so2_raw",
     "so2_byte0",
     "so2_byte1",
     "so2_error",
+    "so2_status",          # optional but helpful
 ]
 
 
