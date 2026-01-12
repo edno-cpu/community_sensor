@@ -42,7 +42,13 @@ COLUMNS = [
     "pm10_atm_pms2",
     "pms2_status",
 
-    # --- OPC-N3 ---
+    # --- PMS agreement ---
+    "pm25_pms_mean",
+    "pm25_pms_rpd",
+    "pm25_pair_flag",
+    "pm25_suspect_sensor",
+
+   # --- OPC-N3 ---
    # "pm1_atm_opc",
    # "pm25_atm_opc",
    # "pm10_atm_opc",

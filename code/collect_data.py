@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import time
 import logging
+from collections import deque
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -48,6 +49,29 @@ def setup_logging(root: Path) -> logging.Logger:
     return logging.getLogger("emis.collect")
 
 
+# -----------------------
+# PMS agreement logic (PurpleAir-style)
+# -----------------------
+BASELINE_N = 30      # rolling baseline length (samples)
+MIN_PM = 1.0         # below this, don't overreact to mismatch
+RPD_OK = 0.25        # <= 25% relative percent difference = OK
+
+
+def rpd(a: float, b: float) -> Optional[float]:
+    m = 0.5 * (a + b)
+    if m <= 0:
+        return None
+    return abs(a - b) / m
+
+
+def median(xs):
+    xs = sorted(xs)
+    n = len(xs)
+    if n == 0:
+        return None
+    return xs[n // 2] if n % 2 else 0.5 * (xs[n // 2 - 1] + xs[n // 2])
+
+
 def main() -> None:
     root = Path(__file__).resolve().parents[1]
     log = setup_logging(root)
@@ -59,12 +83,16 @@ def main() -> None:
 
     s_cfg: Dict[str, Any] = cfg.get("sensors", {}) or {}
 
+    # Rolling baselines for PMS diagnostics
+    pms1_hist = deque(maxlen=BASELINE_N)
+    pms2_hist = deque(maxlen=BASELINE_N)
+
     # -----------------------
     # Initialise sensors
     # -----------------------
     pms1_reader: Optional[PMSReader] = None
     pms2_reader: Optional[PMSReader] = None
-   #  opc_reader: Optional[OPCN3] = None
+    # opc_reader: Optional[OPCN3] = None
 
     # PMS1
     p1 = s_cfg.get("pms1", {}) or {}
@@ -86,26 +114,11 @@ def main() -> None:
         else:
             log.warning("PMS2 enabled but no port provided; disabling")
 
-    # OPC-N3
-    #o_cfg = s_cfg.get("opc", {}) or {}
-    #if o_cfg.get("enabled", False):
-    #    try:
-    #        opc_bus = int(o_cfg.get("spi_bus", 0))
-    #        opc_device = int(o_cfg.get("spi_device", 0))
-            # Only pass max speed if your class supports it
-            # opc_speed = int(o_cfg.get("spi_max_speed", 5000000))
-
-    #        opc_reader = OPCN3(bus=opc_bus, device=opc_device)
-    #        log.info(f"OPC-N3 enabled on SPI bus {opc_bus}, device {opc_device}")
-    #    except Exception as e:
-    #        log.warning(f"Disabling OPC-N3 after init failure: {e}")
-    #        opc_reader = None
-
     # BME688
     b_cfg = s_cfg.get("bme", {}) or {}
     bme_enabled = bool(b_cfg.get("enabled", False))
     bme_bus = int(b_cfg.get("i2c_bus", 1))
-    bme_addr = b_cfg.get("address", 0x76)  # can be 0x76 or 0x77
+    bme_addr = b_cfg.get("address", 0x76)
     try:
         bme_addr = int(str(bme_addr), 0)
     except Exception:
@@ -140,7 +153,7 @@ def main() -> None:
 
             row: Dict[str, Any] = {
                 "timestamp_utc": isoformat_utc_z(t_utc),
-                "timestamp_local": isoformat_local(t_local),  # NOTE: timekeeping helper should accept tz_name
+                "timestamp_local": isoformat_local(t_local),
                 "node_id": node_id,
             }
 
@@ -190,27 +203,88 @@ def main() -> None:
                     row["pms2_status"] = f"error:{e}"
                     log.warning(f"PMS2 read error: {e}")
 
-            # ---- OPC ----
-            #if opc_reader is not None:
-            #    try:
-            #        o = opc_reader.read()
-            #        if o is not None:
-            #            # allow zeros: 0 is valid data
-            #            row["pm1_atm_opc"] = o.get("pm1")
-            #            row["pm25_atm_opc"] = o.get("pm25")
-            #            row["pm10_atm_opc"] = o.get("pm10")
-            #            row["opc_status"] = "ok"
-            #        else:
-            #            row["opc_status"] = "no_frame"
-            #    except Exception as e:
-            #        row["opc_status"] = f"error:{e}"
-            #        log.warning(f"OPC read error: {e}")
+            # ---- PMS pair diagnostics (PM2.5) ----
+            row["pm25_pms_mean"] = ""
+            row["pm25_pms_rpd"] = ""
+            row["pm25_pair_flag"] = ""
+            row["pm25_suspect_sensor"] = ""   # will be set to OK if nothing is suspect
+
+            pm1 = row.get("pm25_atm_pms1")
+            pm2 = row.get("pm25_atm_pms2")
+            st1 = row.get("pms1_status", "")
+            st2 = row.get("pms2_status", "")
+
+            # Update rolling baselines from "ok" readings
+            if st1 == "ok" and pm1 is not None:
+                try:
+                    pms1_hist.append(float(pm1))
+                except Exception:
+                    pass
+
+            if st2 == "ok" and pm2 is not None:
+                try:
+                    pms2_hist.append(float(pm2))
+                except Exception:
+                    pass
+
+            # Status-first logic
+            if st1 != "ok" and st2 != "ok":
+                row["pm25_pair_flag"] = "BOTH_BAD"
+                row["pm25_suspect_sensor"] = "BOTH"
+            elif st1 != "ok":
+                row["pm25_pair_flag"] = "PMS1_BAD"
+                row["pm25_suspect_sensor"] = "PMS1"
+            elif st2 != "ok":
+                row["pm25_pair_flag"] = "PMS2_BAD"
+                row["pm25_suspect_sensor"] = "PMS2"
+            elif pm1 is not None and pm2 is not None:
+                try:
+                    pm1f = float(pm1)
+                    pm2f = float(pm2)
+
+                    mean_pm = 0.5 * (pm1f + pm2f)
+                    row["pm25_pms_mean"] = mean_pm
+
+                    if mean_pm >= MIN_PM:
+                        d = rpd(pm1f, pm2f)
+                        row["pm25_pms_rpd"] = d
+
+                        if d is not None and d <= RPD_OK:
+                            row["pm25_pair_flag"] = "OK"
+                        else:
+                            b1 = median(list(pms1_hist))
+                            b2 = median(list(pms2_hist))
+
+                            dev1 = abs(pm1f - b1) / max(b1, MIN_PM) if b1 is not None else 0.0
+                            dev2 = abs(pm2f - b2) / max(b2, MIN_PM) if b2 is not None else 0.0
+
+                            row["pm25_pair_flag"] = "MISMATCH"
+                            if dev1 > dev2 * 1.5:
+                                row["pm25_suspect_sensor"] = "PMS1"
+                            elif dev2 > dev1 * 1.5:
+                                row["pm25_suspect_sensor"] = "PMS2"
+                            else:
+                                row["pm25_suspect_sensor"] = "BOTH"
+                    else:
+                        row["pm25_pair_flag"] = "LOW_PM_OK"
+
+                except Exception:
+                    row["pm25_pair_flag"] = "ERROR"
+                    row["pm25_suspect_sensor"] = "UNKNOWN"
+            else:
+                # Not enough data to compare (e.g., one PM missing but status ok)
+                row["pm25_pair_flag"] = "INCOMPLETE"
+                row["pm25_suspect_sensor"] = "UNKNOWN"
+
+            # ✅ KEY CHANGE YOU ASKED FOR:
+            # If nothing ended up being "suspect", explicitly mark OK.
+            if row.get("pm25_suspect_sensor", "") == "" and row.get("pm25_pair_flag", "") in ("OK", "LOW_PM_OK"):
+                row["pm25_suspect_sensor"] = "OK"
 
             # ---- SO2 ----
             if so2_enabled:
                 try:
                     v = read_so2()
-                    # v may contain zeros; that still counts as "present"
                     row["so2_raw"] = v.get("so2_raw")
                     row["so2_byte0"] = v.get("so2_byte0")
                     row["so2_byte1"] = v.get("so2_byte1")
@@ -234,8 +308,6 @@ def main() -> None:
             pms1_reader.close()
         if pms2_reader is not None:
             pms2_reader.close()
-        #if opc_reader is not None:
-        #    opc_reader.close()
         log.info("Shutdown complete")
 
 
