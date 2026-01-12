@@ -20,7 +20,7 @@ import yaml
 from sensors.pms import PMSReader
 from sensors.bme import read_bme
 from sensors.so2 import init_so2, read_so2
-from sensors.opc_n3 import OPCN3
+# from sensors.opc_n3 import OPCN3
 
 from utils.timekeeping import now_utc, utc_to_local, isoformat_utc_z, isoformat_local
 from daily_writer import DailyWriter
@@ -64,7 +64,7 @@ def main() -> None:
     # -----------------------
     pms1_reader: Optional[PMSReader] = None
     pms2_reader: Optional[PMSReader] = None
-    opc_reader: Optional[OPCN3] = None
+   #  opc_reader: Optional[OPCN3] = None
 
     # PMS1
     p1 = s_cfg.get("pms1", {}) or {}
@@ -87,19 +87,19 @@ def main() -> None:
             log.warning("PMS2 enabled but no port provided; disabling")
 
     # OPC-N3
-    o_cfg = s_cfg.get("opc", {}) or {}
-    if o_cfg.get("enabled", False):
-        try:
-            opc_bus = int(o_cfg.get("spi_bus", 0))
-            opc_device = int(o_cfg.get("spi_device", 0))
+    #o_cfg = s_cfg.get("opc", {}) or {}
+    #if o_cfg.get("enabled", False):
+    #    try:
+    #        opc_bus = int(o_cfg.get("spi_bus", 0))
+    #        opc_device = int(o_cfg.get("spi_device", 0))
             # Only pass max speed if your class supports it
             # opc_speed = int(o_cfg.get("spi_max_speed", 5000000))
 
-            opc_reader = OPCN3(bus=opc_bus, device=opc_device)
-            log.info(f"OPC-N3 enabled on SPI bus {opc_bus}, device {opc_device}")
-        except Exception as e:
-            log.warning(f"Disabling OPC-N3 after init failure: {e}")
-            opc_reader = None
+    #        opc_reader = OPCN3(bus=opc_bus, device=opc_device)
+    #        log.info(f"OPC-N3 enabled on SPI bus {opc_bus}, device {opc_device}")
+    #    except Exception as e:
+    #        log.warning(f"Disabling OPC-N3 after init failure: {e}")
+    #        opc_reader = None
 
     # BME688
     b_cfg = s_cfg.get("bme", {}) or {}
@@ -136,7 +136,7 @@ def main() -> None:
     try:
         while True:
             t_utc = now_utc()
-	    t_local = utc_to_local(t_utc, tz_name)
+            t_local = utc_to_local(t_utc, tz_name)
 
             row: Dict[str, Any] = {
                 "timestamp_utc": isoformat_utc_z(t_utc),
@@ -191,20 +191,20 @@ def main() -> None:
                     log.warning(f"PMS2 read error: {e}")
 
             # ---- OPC ----
-            if opc_reader is not None:
-                try:
-                    o = opc_reader.read()
-                    if o is not None:
-                        # allow zeros: 0 is valid data
-                        row["pm1_atm_opc"] = o.get("pm1")
-                        row["pm25_atm_opc"] = o.get("pm25")
-                        row["pm10_atm_opc"] = o.get("pm10")
-                        row["opc_status"] = "ok"
-                    else:
-                        row["opc_status"] = "no_frame"
-                except Exception as e:
-                    row["opc_status"] = f"error:{e}"
-                    log.warning(f"OPC read error: {e}")
+            #if opc_reader is not None:
+            #    try:
+            #        o = opc_reader.read()
+            #        if o is not None:
+            #            # allow zeros: 0 is valid data
+            #            row["pm1_atm_opc"] = o.get("pm1")
+            #            row["pm25_atm_opc"] = o.get("pm25")
+            #            row["pm10_atm_opc"] = o.get("pm10")
+            #            row["opc_status"] = "ok"
+            #        else:
+            #            row["opc_status"] = "no_frame"
+            #    except Exception as e:
+            #        row["opc_status"] = f"error:{e}"
+            #        log.warning(f"OPC read error: {e}")
 
             # ---- SO2 ----
             if so2_enabled:
@@ -234,8 +234,8 @@ def main() -> None:
             pms1_reader.close()
         if pms2_reader is not None:
             pms2_reader.close()
-        if opc_reader is not None:
-            opc_reader.close()
+        #if opc_reader is not None:
+        #    opc_reader.close()
         log.info("Shutdown complete")
 
 

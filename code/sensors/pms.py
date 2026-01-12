@@ -5,7 +5,7 @@ PMS5003 sensor reader.
 Provides a PMSReader class that reads PMS5003 frames from a serial port and
 returns PM1/PM2.5/PM10 as a dict.
 """
-
+import time
 import serial
 import struct
 from typing import Optional, Dict

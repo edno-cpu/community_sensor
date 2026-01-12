@@ -40,6 +40,9 @@ def _ensure_sensor(address: int = 0x76) -> bme680.BME680:
 
         # Enable gas sensor; for now we just report gas resistance as "voc_ohm"
         sensor.set_gas_status(bme680.ENABLE_GAS_MEAS)
+        sensor.set_gas_heater_temperature(320)
+        sensor.set_gas_heater_duration(150)
+        sensor.select_gas_heater_profile(0)
 
         _sensor = sensor
 
@@ -67,10 +70,8 @@ def read_bme(bus: int = 1, address: int = 0x76) -> Optional[Dict[str, float]]:
             rh_pct = data.humidity
             pressure_hpa = data.pressure
 
-            voc_ohm = None
-            # Only trust gas resistance when heater is stable
-            if data.heat_stable:
-                voc_ohm = data.gas_resistance
+            # Record VOC resistance even if not heat-stable yet
+            voc_ohm = data.gas_resistance
 
             return {
                 "temp_c": temp_c,

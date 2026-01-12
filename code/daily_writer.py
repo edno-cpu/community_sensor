@@ -43,10 +43,10 @@ COLUMNS = [
     "pms2_status",
 
     # --- OPC-N3 ---
-    "pm1_atm_opc",
-    "pm25_atm_opc",
-    "pm10_atm_opc",
-    "opc_status",
+   # "pm1_atm_opc",
+   # "pm25_atm_opc",
+   # "pm10_atm_opc",
+   # "opc_status",
 
     # --- SO2 (SPEC board raw bytes) ---
     "so2_ppm",             # placeholder if you later compute ppm
