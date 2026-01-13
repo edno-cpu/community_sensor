@@ -111,7 +111,7 @@ class DailyWriter:
 
         out = []
         for col in COLUMNS:
-            val = row.get(col, "")
+            val = row.get(col, "NODATA")
             if val is None:
                 val = ""
             out.append(val)

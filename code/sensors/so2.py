@@ -2,24 +2,28 @@
 """
 SO2 sensor reader (DFRobot Gravity calibrated SO2, I2C, address 0x74)
 
-Outputs a dict with these columns (keep stable with your daily CSV):
+Stable output keys (match your daily CSV columns):
   - so2_ppm
   - so2_raw
   - so2_byte0
   - so2_byte1
-  - so2_error   (NOW: "OK" if no error)
+  - so2_error   ("OK" if no error; otherwise error code/message)
   - so2_status  ("ok" or "error")
 
-Notes:
-- You observed responses like: FF 86 00 00 2B 01 00 00
-  This script uses the FF 86 frame format:
-    [0]=0xFF, [1]=0x86, [2]=high byte, [3]=low byte, rest ignored here.
-  ppm = (high<<8 | low)
-- If your module uses a different command/frame, we can adjust.
+Frame formats observed on your bus:
+  - FF 86 ...   (common DFRobot gas read frame style)
+  - FF 78 ...   (you also saw cmd=0x78 responses)
+
+This reader:
+  1) tries to "poke" the device with a command (0x86 then 0x78),
+  2) reads 8 bytes from register 0x00,
+  3) parses FF 86 / FF 78 frames:
+       raw = (byte2<<8) | byte3
+       ppm = float(raw)   # placeholder scaling; adjust if your sensor uses /10, /100, etc.
 """
 
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 try:
     import smbus2 as smbus
@@ -41,87 +45,106 @@ def init_so2(bus: int = I2C_BUS, address: int = DEFAULT_ADDR) -> None:
         _bus = smbus.SMBus(bus)
 
 
-def _read_frame_ff86() -> Optional[Dict[str, Any]]:
-    """
-    Attempt to read an 8-byte FF 86 frame from the device.
+def _read8_from_reg0() -> Optional[List[int]]:
+    """Read 8 bytes from register 0x00; return list of ints or None."""
+    global _bus, _addr
+    if _bus is None:
+        init_so2()
+    try:
+        data = _bus.read_i2c_block_data(_addr, 0x00, 8)
+        if data and len(data) == 8:
+            return data
+        return None
+    except Exception:
+        return None
 
-    Returns dict with ppm/raw/byte0/byte1 if successful, else None.
+
+def _poke_then_read(cmd: int) -> Optional[List[int]]:
+    """
+    Try to "poke" the device with a command byte, then read from reg 0x00.
+    Many DFRobot I2C firmwares behave like this.
     """
     global _bus, _addr
     if _bus is None:
         init_so2()
 
-    # Some DFRobot I2C firmwares respond to a "gas read" command 0x86 or 0x78.
-    # We will try a couple patterns, but still keep outputs minimal.
-    # Pattern A: read 8 bytes starting at 0x00 (many I2C adapters map to a register space)
-    candidates = []
+    # Some firmwares accept just a command byte written; others ignore it.
+    # We try the simplest safe write: write_byte (falls back to SMBus "quick command" style).
     try:
-        candidates.append(_bus.read_i2c_block_data(_addr, 0x00, 8))
+        _bus.write_byte(_addr, cmd)
     except Exception:
+        # If write fails, still try read — sometimes sensor just streams latest value.
         pass
 
-    # Pattern B: read 8 bytes from a command register 0x86
-    try:
-        candidates.append(_bus.read_i2c_block_data(_addr, 0x86, 8))
-    except Exception:
-        pass
+    return _read8_from_reg0()
 
-    # Pattern C: read 8 bytes from 0x78 (you saw cmd=0x78 responses too)
-    try:
-        candidates.append(_bus.read_i2c_block_data(_addr, 0x78, 8))
-    except Exception:
-        pass
 
-    for data in candidates:
-        if not data or len(data) < 4:
-            continue
+def _parse_frame(data: List[int]) -> Optional[Dict[str, Any]]:
+    """
+    Parse either FF 86 or FF 78 style frames.
+    Returns dict with so2_ppm/so2_raw/so2_byte0/so2_byte1 if recognized, else None.
+    """
+    if not data or len(data) < 4:
+        return None
 
-        # Look for FF 86 header
-        if data[0] == 0xFF and data[1] == 0x86:
-            b0 = data[2]
-            b1 = data[3]
-            raw = (b0 << 8) | b1
-            ppm = float(raw)
+    if data[0] != 0xFF:
+        return None
 
-            return {
-                "so2_ppm": ppm,
-                "so2_raw": raw,
-                "so2_byte0": b0,
-                "so2_byte1": b1,
-            }
+    if data[1] not in (0x86, 0x78):
+        return None
 
-    return None
+    b0 = data[2]
+    b1 = data[3]
+    raw = (b0 << 8) | b1
+
+    # Placeholder: treat raw as ppm directly (as you saw: raw=256 -> ppm=256.0).
+    # If later you learn the scaling (e.g., raw/10), change only this line.
+    ppm = float(raw)
+
+    return {
+        "so2_ppm": ppm,
+        "so2_raw": raw,
+        "so2_byte0": b0,
+        "so2_byte1": b1,
+    }
 
 
 def read_so2() -> Dict[str, Any]:
     """
-    Read SO2 value and return stable column dict.
+    Read SO2 and return stable column dict.
 
-    so2_error is ALWAYS populated:
-      - "OK" if no error
-      - error string if something went wrong
+    - so2_error is ALWAYS populated ("OK" if fine)
+    - so2_ppm is NEVER blank:
+        - numeric when parsed
+        - "NODATA" when no frame
     """
     result: Dict[str, Any] = {
-        "so2_ppm": "",
-        "so2_raw": "",
-        "so2_byte0": "",
-        "so2_byte1": "",
+        "so2_ppm": "NODATA",
+        "so2_raw": "NODATA",
+        "so2_byte0": "NODATA",
+        "so2_byte1": "NODATA",
         "so2_error": "OK",
         "so2_status": "ok",
     }
 
     try:
-        frame = _read_frame_ff86()
-        if frame is None:
-            # No valid frame found this cycle
-            result["so2_status"] = "error"
-            result["so2_error"] = "NO_FRAME"
-            return result
+        # Try command + read patterns in the order you observed
+        for cmd in (0x86, 0x78):
+            data = _poke_then_read(cmd)
+            if not data:
+                continue
 
-        # Fill outputs (note: 0 is valid)
-        result.update(frame)
-        result["so2_error"] = "OK"
-        result["so2_status"] = "ok"
+            frame = _parse_frame(data)
+            if frame:
+                # Fill outputs; allow zeros as valid data
+                result.update(frame)
+                result["so2_error"] = "OK"
+                result["so2_status"] = "ok"
+                return result
+
+        # If we got here: no recognized frame this cycle
+        result["so2_status"] = "error"
+        result["so2_error"] = "NO_FRAME"
         return result
 
     except Exception as e:
