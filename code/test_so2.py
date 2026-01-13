@@ -1,29 +1,4 @@
-python3 - <<'PY'
-import time
-try:
-    import smbus2 as smbus
-except ImportError:
-    import smbus
-
-BUS=1
-ADDR=0x74
-bus=smbus.SMBus(BUS)
-
-def rb(reg, n=2):
-    try:
-        d=bus.read_i2c_block_data(ADDR, reg, n)
-        return d
-    except Exception as e:
-        return None
-
-print("Scanning regs 0x00..0x3F (2 bytes each). Ctrl+C to stop.")
-for reg in range(0x00, 0x40):
-    d = rb(reg, 2)
-    if d is None:
-        continue
-    if any(x != 0 for x in d):
-        print(f"reg 0x{reg:02X}: {d}  (0x{d[0]:02X} 0x{d[1]:02X})")
-PY#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 test_so2_i2c_regs.py
 
