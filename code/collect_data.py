@@ -276,7 +276,6 @@ def main() -> None:
                 row["pm25_pair_flag"] = "INCOMPLETE"
                 row["pm25_suspect_sensor"] = "UNKNOWN"
 
-            # ✅ KEY CHANGE YOU ASKED FOR:
             # If nothing ended up being "suspect", explicitly mark OK.
             if row.get("pm25_suspect_sensor", "") == "" and row.get("pm25_pair_flag", "") in ("OK", "LOW_PM_OK"):
                 row["pm25_suspect_sensor"] = "OK"
