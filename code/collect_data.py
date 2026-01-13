@@ -204,10 +204,10 @@ def main() -> None:
                     log.warning(f"PMS2 read error: {e}")
 
             # ---- PMS pair diagnostics (PM2.5) ----
-            row["pm25_pms_mean"] = ""
-            row["pm25_pms_rpd"] = ""
-            row["pm25_pair_flag"] = ""
-            row["pm25_suspect_sensor"] = ""   # will be set to OK if nothing is suspect
+            row["pm25_pms_mean"] = "NODATA"
+            row["pm25_pms_rpd"] = "NODATA"
+            row["pm25_pair_flag"] = "NODATA"
+            row["pm25_suspect_sensor"] = "NODATA"   # will be set to OK if nothing is suspect
 
             pm1 = row.get("pm25_atm_pms1")
             pm2 = row.get("pm25_atm_pms2")
