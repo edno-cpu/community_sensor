@@ -280,20 +280,22 @@ def main() -> None:
             # If nothing ended up being "suspect", explicitly mark OK.
             if row.get("pm25_suspect_sensor", "") == "" and row.get("pm25_pair_flag", "") in ("OK", "LOW_PM_OK"):
                 row["pm25_suspect_sensor"] = "OK"
-
             # ---- SO2 ----
             if so2_enabled:
                 try:
                     v = read_so2()
-                    row["so2_raw"] = v.get("so2_raw")
+                    row["so2_ppm"]   = v.get("so2_ppm")
+                    row["so2_raw"]   = v.get("so2_raw")
                     row["so2_byte0"] = v.get("so2_byte0")
                     row["so2_byte1"] = v.get("so2_byte1")
-                    row["so2_error"] = v.get("so2_error")
-                    row["so2_status"] = "ok" if not v.get("so2_error") else "error"
+                    row["so2_error"] = v.get("so2_error")     # "OK" if fine
+                    row["so2_status"] = v.get("so2_status")   # "ok" or "error"
                 except Exception as e:
+                    row["so2_ppm"] = "NODATA"
                     row["so2_error"] = f"exception:{e}"
                     row["so2_status"] = "error"
                     log.warning(f"SO2 read error: {e}")
+
 
             # Write
             dw.write_sample(row=row, sample_time_utc=t_utc)
