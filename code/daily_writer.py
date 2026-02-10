@@ -28,7 +28,7 @@ COLUMNS = [
     "rh_pct",
     "pressure_hpa",
     "voc_ohm",
-    "bme_status",          # optional but helpful
+    "bme_status",         
 
     # --- PMS1 ---
     "pm1_atm_pms1",
@@ -55,12 +55,12 @@ COLUMNS = [
    # "opc_status",
 
     # --- SO2 (SPEC board raw bytes) ---
-    "so2_ppm",             # placeholder if you later compute ppm
+    "so2_ppm",             
     "so2_raw",
     "so2_byte0",
     "so2_byte1",
     "so2_error",
-    "so2_status",          # optional but helpful
+    "so2_status",          
 ]
 
 

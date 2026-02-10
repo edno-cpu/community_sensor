@@ -2,25 +2,24 @@
 """
 SO2 sensor reader (DFRobot Gravity calibrated SO2, I2C, address 0x74)
 
-SAFETY-FIRST version:
-- Does NOT use i2c_rdwr command frames (those can wedge the bus if timing is off)
-- Does NOT loop or retry aggressively
-- Does ONE quick attempt per call and returns stable columns every time
-- Rate limits reads so we don't hammer I2C
-
 Stable output keys (match your daily CSV columns):
   - so2_ppm
   - so2_raw
   - so2_byte0
   - so2_byte1
-  - so2_error   ("OK" if no error; otherwise NO_FRAME / exception)
+  - so2_error   ("OK" if no error; otherwise error code/message)
   - so2_status  ("ok" or "error")
 
-Note:
-This assumes the device exposes a “latest frame” via register 0x00 (8 bytes),
-which matches your earlier working behavior.
-If it needs a command frame to update, do that ONLY in a dedicated test script,
-not in the always-on collector.
+This device is command/response over I2C (not register-mapped).
+We send:  FF 01 86 00 00 00 00 00 CS   and read 8 bytes back.
+
+Response (typical):
+  [0]=0xFF
+  [1]=0x86
+  [2]=high
+  [3]=low
+  [4]=gas_type
+  [5]=decimals   (0=>1, 1=>0.1, 2=>0.01)
 """
 
 from __future__ import annotations
@@ -30,65 +29,110 @@ import time
 from typing import Dict, Any, Optional, List
 
 try:
-    import smbus2 as smbus
-except ImportError:
-    import smbus  # type: ignore
+    import smbus2
+    from smbus2 import i2c_msg
+except ImportError as e:
+    raise SystemExit("smbus2 is required. Install with: pip install smbus2") from e
+
 
 I2C_BUS = 1
 DEFAULT_ADDR = 0x74
 
-_bus = None
-_addr = DEFAULT_ADDR
+START = 0xFF
+DEV_ADDR_BYTE = 0x01
 
-# ---- safety knobs ----
-MIN_READ_INTERVAL_S = 1.0     # don't read more often than this
+CMD_READ_GAS = 0x86
+CMD_SET_MODE = 0x78
+MODE_PASSIVE = 0x04
+
+# Safety knobs
+MIN_READ_INTERVAL_S = 2.0        # don't hammer I2C
+MODE_SET_INTERVAL_S = 3600.0     # at most once/hour
+
 _last_read_monotonic = 0.0
+_last_mode_set_monotonic = 0.0
+
+_bus: Optional[smbus2.SMBus] = None
+_addr: int = DEFAULT_ADDR
+
+
+def _close_bus() -> None:
+    global _bus
+    if _bus is not None:
+        try:
+            _bus.close()
+        except Exception:
+            pass
+    _bus = None
 
 
 def init_so2(bus: int = I2C_BUS, address: int = DEFAULT_ADDR) -> None:
-    """Initialize the I2C bus and remember the SO2 address. Safe to call multiple times."""
     global _bus, _addr
     _addr = address
     if _bus is None:
-        _bus = smbus.SMBus(bus)
+        _bus = smbus2.SMBus(bus)
 
 
-def _read8_from_reg0() -> Optional[List[int]]:
-    """Read 8 bytes from register 0x00; return list of ints or None."""
+def _checksum(frame9: List[int]) -> int:
+    s = sum(frame9[1:8]) & 0xFF
+    return ((~s + 1) & 0xFF)
+
+
+def _xfer(out_bytes: List[int], read_len: int) -> List[int]:
     global _bus, _addr
     if _bus is None:
         init_so2()
+    assert _bus is not None
+    w = i2c_msg.write(_addr, out_bytes)
+    r = i2c_msg.read(_addr, read_len)
+    _bus.i2c_rdwr(w, r)
+    return list(r)
 
-    # One fast read, no retries
-    data = _bus.read_i2c_block_data(_addr, 0x00, 8)
-    if data and len(data) == 8:
-        return list(data)
-    return None
+
+def _maybe_set_passive_mode() -> None:
+    global _last_mode_set_monotonic
+    now = time.monotonic()
+    if (now - _last_mode_set_monotonic) < MODE_SET_INTERVAL_S:
+        return
+
+    frame = [START, DEV_ADDR_BYTE, CMD_SET_MODE, MODE_PASSIVE, 0, 0, 0, 0, 0]
+    frame[8] = _checksum(frame)
+    try:
+        _ = _xfer(frame, 8)
+        _last_mode_set_monotonic = now
+    except Exception:
+        # Not fatal; skip
+        pass
 
 
-def _parse_frame(data: List[int]) -> Optional[Dict[str, Any]]:
-    """
-    Parse FF 86 / FF 78 style frames if present.
-    We only use bytes 2-3 as raw and convert to ppm conservatively.
-    """
-    if len(data) < 6:
+def _read_gas_frame() -> Optional[List[int]]:
+    frame = [START, DEV_ADDR_BYTE, CMD_READ_GAS, 0, 0, 0, 0, 0, 0]
+    frame[8] = _checksum(frame)
+    try:
+        resp = _xfer(frame, 8)
+        return resp if resp and len(resp) == 8 else None
+    except Exception:
         return None
-    if data[0] != 0xFF:
+
+
+def _decode(resp: List[int]) -> Optional[Dict[str, Any]]:
+    if len(resp) < 6:
         return None
-    if data[1] not in (0x86, 0x78):
+    if resp[0] != 0xFF:
+        return None
+    if resp[1] != 0x86:
         return None
 
-    b0 = data[2]
-    b1 = data[3]
+    b0 = resp[2]
+    b1 = resp[3]
     raw = (b0 << 8) | b1
 
-    # If decimals exist in byte5 (your tests showed dec=1 often), apply it.
-    dec = data[5]
+    dec = resp[5]
     scale = {0: 1.0, 1: 0.1, 2: 0.01}.get(dec, 1.0)
     ppm = float(raw) * scale
 
     return {
-        "so2_ppm": ppm,
+        "so2_ppm": ppm,     # 0.0 is valid!
         "so2_raw": raw,
         "so2_byte0": b0,
         "so2_byte1": b1,
@@ -96,12 +140,6 @@ def _parse_frame(data: List[int]) -> Optional[Dict[str, Any]]:
 
 
 def read_so2() -> Dict[str, Any]:
-    """
-    Safety-first read:
-    - rate limited
-    - one quick read
-    - never blank columns
-    """
     global _last_read_monotonic
 
     result: Dict[str, Any] = {
@@ -113,35 +151,44 @@ def read_so2() -> Dict[str, Any]:
         "so2_status": "ok",
     }
 
-    # rate limit
     now = time.monotonic()
     if (now - _last_read_monotonic) < MIN_READ_INTERVAL_S:
-        # Not an error; we just didn't sample this time
         result["so2_status"] = "error"
         result["so2_error"] = "RATE_LIMIT"
         return result
     _last_read_monotonic = now
 
     try:
-        data = _read8_from_reg0()
-        if not data:
+        # Don’t do this every loop, just occasionally
+        _maybe_set_passive_mode()
+
+        resp = _read_gas_frame()
+        if not resp:
             result["so2_status"] = "error"
             result["so2_error"] = "NO_FRAME"
             return result
 
-        parsed = _parse_frame(data)
-        if not parsed:
+        decoded = _decode(resp)
+        if decoded is None:
             result["so2_status"] = "error"
             result["so2_error"] = "BAD_FRAME"
             return result
 
-        result.update(parsed)
+        result.update(decoded)
         result["so2_error"] = "OK"
         result["so2_status"] = "ok"
         return result
 
+    except OSError as e:
+        # Common I2C issues: errno 5, remote I/O, etc.
+        logging.exception("I2C OSError reading SO2")
+        result["so2_status"] = "error"
+        result["so2_error"] = f"OSError:{getattr(e, 'errno', '')}:{e}"
+        _close_bus()  # allow recovery next call
+        return result
+
     except Exception as e:
-        logging.exception("Error reading SO2 sensor (safety-first)")
+        logging.exception("Error reading SO2")
         result["so2_status"] = "error"
         result["so2_error"] = str(e)
         return result
