@@ -3,14 +3,31 @@ Description=ÉMIS Community Sensor Node
 After=network-online.target
 Wants=network-online.target
 
+# If this service fails repeatedly, trigger a recovery action
+OnFailure=emis-reboot.service
+
 [Service]
 Type=simple
 User=emis
 WorkingDirectory=/home/emis/emis/code
 ExecStart=/usr/bin/python3 /home/emis/emis/code/collect_data.py
-Restart=on-failure
-RestartSec=10
+
+# Restart behavior
+Restart=always
+RestartSec=15
+
+# Don’t hang forever on stop
+TimeoutStopSec=10
+KillSignal=SIGTERM
+KillMode=process
+
+# Immediate stdout/stderr flushing
 Environment=PYTHONUNBUFFERED=1
+SyslogIdentifier=emis-collect
+
+# Prevent rapid restart storms
+StartLimitIntervalSec=300
+StartLimitBurst=3
 
 [Install]
 WantedBy=multi-user.target

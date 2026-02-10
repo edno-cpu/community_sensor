@@ -6,11 +6,13 @@ Logic (file-based, no hardware probing):
 - If required columns for a sensor are missing from the file header -> Not integrated
 - Else:
     - For PMS sensors: use the pmsX_status column as the primary indicator
+    - For SO2 (DFRobot): use so2_status / so2_error if present
     - For others: if latest row has "present" values for the sensor's columns -> recording
                else -> connected but not recording
 
 Important detail:
 - A value of "0" (zero) IS considered present/recording.
+- Strings like "NODATA" / "BAD_FRAME" are treated as NOT present.
 """
 
 from __future__ import annotations
@@ -34,19 +36,18 @@ def fmt(color: str, text: str) -> str:
     return f"{BOLD}{color}{text}{RESET}"
 
 
-# --- Sensor -> columns we expect in the DAILY CSV ---
 # name, required value columns, optional status column (if present)
 SENSORS: List[Tuple[str, List[str], Optional[str]]] = [
     ("PMS-1", ["pm1_atm_pms1", "pm25_atm_pms1", "pm10_atm_pms1"], "pms1_status"),
     ("PMS-2", ["pm1_atm_pms2", "pm25_atm_pms2", "pm10_atm_pms2"], "pms2_status"),
-    ("BME688", ["temp_c", "rh_pct", "pressure_hpa"], None),
+    ("BME688", ["temp_c", "rh_pct", "pressure_hpa"], "bme_status"),
 
-    # These require your DailyWriter/collector to include these columns:
+    # OPC-N3 (leave here if columns exist in your DailyWriter; otherwise it'll show Not integrated)
     ("OPC-N3", ["pm1_atm_opc", "pm25_atm_opc", "pm10_atm_opc"], "opc_status"),
 
-    # SO2: right now you're reading/writing so2_raw / bytes.
-    # If later you compute ppm, keep so2_ppm in here too.
-    ("SPEC SO2", ["so2_raw", "so2_byte0", "so2_byte1"], None),
+    # SO2 (DFRobot Gravity)
+    # If you compute so2_ppm, include it. so2_status/so2_error help a lot.
+    ("SO2", ["so2_ppm", "so2_raw", "so2_byte0", "so2_byte1"], "so2_status"),
 ]
 
 
@@ -57,12 +58,10 @@ def load_config(root: Path) -> Dict:
 
 
 def today_local_datestr() -> str:
-    # Uses the Pi's local date; daily filenames are based on local date in your pipeline.
     return datetime.now().date().isoformat()
 
 
 def newest_daily_file(daily_dir: Path, node_id: str) -> Optional[Path]:
-    # Prefer today's file, otherwise fall back to newest matching file
     today = today_local_datestr()
     p = daily_dir / f"{node_id}_{today}.csv"
     if p.exists():
@@ -77,10 +76,6 @@ def newest_daily_file(daily_dir: Path, node_id: str) -> Optional[Path]:
 
 
 def read_header_and_last_row(path: Path) -> Tuple[List[str], Dict[str, str]]:
-    """
-    Returns (header_columns, last_row_map).
-    last_row_map maps column_name -> last_row_value (stripped).
-    """
     with path.open("r", encoding="utf-8", newline="") as f:
         reader = csv.reader(f)
         header = next(reader, [])
@@ -101,12 +96,21 @@ def read_header_and_last_row(path: Path) -> Tuple[List[str], Dict[str, str]]:
         }
 
 
+# Strings that mean “not a real measurement”
+NON_DATA_TOKENS = {
+    "na", "nan", "none", "null",
+    "nodata", "no_frame", "bad_frame", "rate_limit",
+    "error", "unknown", "incomplete",
+}
+
+
 def is_present_value(v: str) -> bool:
     """
     True if the string value should count as "present/recording".
 
     - Empty string -> not present
-    - "na", "nan", "none", "null" (case-insensitive) -> not present
+    - NA-like values -> not present
+    - NODATA/BAD_FRAME/etc -> not present
     - "0" / "0.0" / etc -> PRESENT (important!)
     """
     if v is None:
@@ -114,19 +118,22 @@ def is_present_value(v: str) -> bool:
     s = str(v).strip()
     if s == "":
         return False
-    if s.lower() in ("na", "nan", "none", "null"):
+
+    sl = s.lower()
+
+    # Treat tokens (including your pipeline codes) as “not present”
+    if sl in NON_DATA_TOKENS:
         return False
+
+    # Treat "error:whatever" or "exception:whatever" as not present
+    if sl.startswith("error") or sl.startswith("exception") or sl.startswith("bad_") or sl.startswith("no_"):
+        return False
+
     return True
 
 
 def any_present(vals: Dict[str, str], cols: List[str]) -> bool:
-    """
-    True if ANY of the specified columns has a present value.
-    """
-    for c in cols:
-        if is_present_value(vals.get(c, "")):
-            return True
-    return False
+    return any(is_present_value(vals.get(c, "")) for c in cols)
 
 
 def main() -> None:
@@ -164,6 +171,7 @@ def main() -> None:
         # 2) Value + status extraction
         values_present = any_present(last_vals, cols)
         status_val = last_vals.get(status_col, "").strip() if status_col else ""
+        err_val = last_vals.get("so2_error", "").strip() if name == "SO2" else ""
 
         # 3) PMS-specific: status-driven truth
         if name.startswith("PMS"):
@@ -182,7 +190,28 @@ def main() -> None:
                     print(f"  {fmt(YELLOW, f'{name}: Not recording (status={status_val})')}")
             continue
 
-        # 4) Generic sensors
+        # 4) SO2: use status column if available
+        if name == "SO2":
+            # so2_status should be "ok" or "error"
+            if status_val == "ok" and values_present:
+                print(f"  {fmt(GREEN, 'SO2: Connected and recording')}")
+            elif status_val == "ok" and not values_present:
+                # This can happen if so2_status was left ok but values are NODATA
+                msg = "SO2: Status ok but no valid data"
+                if err_val:
+                    msg += f" (so2_error={err_val})"
+                print(f"  {fmt(YELLOW, msg)}")
+            else:
+                # error path
+                msg = "SO2: Not recording"
+                if status_val:
+                    msg += f" (status={status_val})"
+                if err_val:
+                    msg += f" (so2_error={err_val})"
+                print(f"  {fmt(RED, msg)}")
+            continue
+
+        # 5) Generic sensors
         if values_present:
             if status_val and status_val not in ("ok",):
                 print(f"  {fmt(YELLOW, f'{name}: Recording but status={status_val}')}")
